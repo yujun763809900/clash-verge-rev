@@ -10,6 +10,7 @@ import {
   Button,
   Card,
   CardContent,
+  CircularProgress,
   FormControlLabel,
   Grid,
   IconButton,
@@ -29,6 +30,8 @@ import {
   saveTunnelmeshConfig,
   setTunnelmeshEnabled,
   validateTunnelmeshConfig,
+  getTunnelmeshAgents,
+  type TunnelMeshAgent,
   type TunnelMeshSaveRequest,
   type TunnelMeshTunnelConfig,
 } from '@/services/cmds'
@@ -61,6 +64,22 @@ const TunnelMeshPage = () => {
   const [serverUrl, setServerUrl] = useState('')
   const [token, setToken] = useState('')
   const [tunnels, setTunnels] = useState<TunnelMeshTunnelConfig[]>([])
+  const {
+    data: agents = [],
+    error: agentsError,
+    isFetching: agentsFetching,
+    refetch: refetchAgents,
+  } = useQuery({
+    queryKey: ['getTunnelmeshAgents', serverUrl],
+    queryFn: () =>
+      getTunnelmeshAgents({
+        server_url: serverUrl,
+        token: token || null,
+      }),
+    enabled: Boolean(serverUrl && (data?.client.token_configured || token)),
+    staleTime: 30000,
+    retry: false,
+  })
 
   useEffect(() => {
     if (!data) return
@@ -120,6 +139,19 @@ const TunnelMeshPage = () => {
         currentIndex === index ? { ...tunnel, ...patch } : tunnel,
       ),
     )
+  }
+
+  const agentOptions = (currentAgentId: string): TunnelMeshAgent[] => {
+    if (
+      !currentAgentId ||
+      agents.some((agent) => agent.id === currentAgentId)
+    ) {
+      return agents
+    }
+    return [
+      ...agents,
+      { id: currentAgentId, name: currentAgentId, online: false },
+    ]
   }
 
   return (
@@ -278,15 +310,40 @@ const TunnelMeshPage = () => {
                         />
                       </Grid>
                       <Grid size={{ xs: 12, sm: 6 }}>
-                        <TextField
-                          fullWidth
-                          label={t('settings.tunnelmesh.fields.agentId')}
-                          value={tunnel.agent_id}
-                          onChange={(e) =>
-                            updateTunnel(index, { agent_id: e.target.value })
-                          }
-                          margin="dense"
-                        />
+                        <Box sx={{ display: 'flex', alignItems: 'center' }}>
+                          <TextField
+                            select
+                            fullWidth
+                            label={t('settings.tunnelmesh.fields.agentId')}
+                            value={tunnel.agent_id}
+                            onChange={(e) =>
+                              updateTunnel(index, { agent_id: e.target.value })
+                            }
+                            margin="dense"
+                            disabled={agentsFetching && agents.length === 0}
+                            helperText={
+                              agentsError ? String(agentsError) : undefined
+                            }
+                          >
+                            {agentOptions(tunnel.agent_id).map((agent) => (
+                              <MenuItem key={agent.id} value={agent.id}>
+                                {`${agent.name || agent.id} (${agent.id}) · ${agent.online ? 'online' : 'offline'}`}
+                              </MenuItem>
+                            ))}
+                          </TextField>
+                          <IconButton
+                            aria-label={t('settings.tunnelmesh.actions.reload')}
+                            onClick={() => void refetchAgents()}
+                            disabled={agentsFetching}
+                            sx={{ mt: 1 }}
+                          >
+                            {agentsFetching ? (
+                              <CircularProgress size={20} />
+                            ) : (
+                              <Refresh />
+                            )}
+                          </IconButton>
+                        </Box>
                       </Grid>
                       {['tcp', 'udp', 'http'].includes(tunnel.protocol) && (
                         <>

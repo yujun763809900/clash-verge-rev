@@ -1,5 +1,6 @@
 //! Embedded TunnelMesh client.
 
+pub mod agents;
 pub mod config;
 pub mod forward;
 pub mod manager;

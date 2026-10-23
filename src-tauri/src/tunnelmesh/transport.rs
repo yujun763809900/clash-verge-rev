@@ -123,9 +123,16 @@ impl TunnelMeshTransport {
         let host_header = parsed_endpoint
             .port()
             .map_or_else(|| host.to_owned(), |port| format!("{host}:{port}"));
-        let mut request = tungstenite::http::Request::builder()
+        let origin_scheme = if parsed_endpoint.scheme() == "wss" {
+            "https"
+        } else {
+            "http"
+        };
+        let origin = format!("{origin_scheme}://{host_header}");
+        let request = tungstenite::http::Request::builder()
             .uri(endpoint)
             .header(header::HOST, host_header)
+            .header(header::ORIGIN, origin)
             .header(header::CONNECTION, "Upgrade")
             .header(header::UPGRADE, "websocket")
             .header("Sec-WebSocket-Version", "13")
@@ -134,10 +141,6 @@ impl TunnelMeshTransport {
             .header(header::SEC_WEBSOCKET_PROTOCOL, CLIENT_SUBPROTOCOLS.join(", "))
             .body(())
             .map_err(|_| TransportError::Handshake)?;
-        // The origin is intentionally omitted.  TunnelMesh authenticates with
-        // the bearer header and does not require browser origin semantics.
-        request.headers_mut().remove(header::ORIGIN);
-
         let mut config = WebSocketConfig::default();
         config.max_message_size = Some(max_message_size);
         config.max_frame_size = Some(max_message_size);

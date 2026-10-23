@@ -36,6 +36,31 @@ pub struct TunnelMeshSaveRequest {
     pub token: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct TunnelMeshAgentsRequest {
+    pub server_url: String,
+    pub token: Option<String>,
+}
+
+#[tauri::command]
+pub async fn get_tunnelmesh_agents(
+    request: TunnelMeshAgentsRequest,
+) -> CmdResult<Vec<crate::tunnelmesh::agents::TunnelMeshAgent>> {
+    let token = match request.token {
+        Some(token) => token,
+        None => {
+            TunnelMeshConfig::load_from_app_dir()
+                .await
+                .map_err(super::CommandFailure::plain)?
+                .client
+                .token
+        }
+    };
+    crate::tunnelmesh::agents::list_agents(&request.server_url, &token)
+        .await
+        .stringify_err()
+}
+
 #[tauri::command]
 pub async fn get_tunnelmesh_config() -> CmdResult<TunnelMeshConfigSnapshot> {
     TunnelMeshConfig::load_from_app_dir()
@@ -110,7 +135,7 @@ pub async fn set_tunnelmesh_enabled(enabled: bool) -> CmdResult<TunnelMeshStatus
     verge.data_arc().save_file().await.stringify_err()?;
 
     let status = if let Some(config) = config {
-        manager().reload(config).await.stringify_err()?
+        manager().restart(config).await.stringify_err()?
     } else {
         manager().stop().await.stringify_err()?
     };

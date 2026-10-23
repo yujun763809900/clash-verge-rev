@@ -1,6 +1,8 @@
 use super::protocol::{Frame, FrameType};
 use super::session::{StreamRequest, TunnelMeshSession};
-use super::transport::{FrameTransport, SUBPROTOCOL_LEGACY, SUBPROTOCOL_OPEN_RESULT, TransportError};
+use super::transport::{
+    FrameTransport, SUBPROTOCOL_CLIENT_METADATA, SUBPROTOCOL_LEGACY, SUBPROTOCOL_OPEN_RESULT, TransportError,
+};
 use async_trait::async_trait;
 use std::sync::Arc;
 use tokio::sync::{Mutex, mpsc};
@@ -112,12 +114,56 @@ async fn one_stream_round_trips_data_and_honors_open_window() {
     stream.send_data(b"request", &cancel).await.expect("data sends");
     let data = outbound.recv().await.expect("data frame");
     assert_eq!(data.frame_type, FrameType::Data);
+    assert_eq!(data.flags, 0, "DATA must not half-close the stream");
     assert_eq!(data.payload, b"request");
     stream.half_close().await.expect("half close sends");
     assert_eq!(
         outbound.recv().await.expect("close frame").frame_type,
         FrameType::HalfClose
     );
+    session.close().await.expect("session closes");
+}
+
+#[tokio::test]
+async fn metadata_hello_is_sent_before_open_stream() {
+    let (transport, inbound, mut outbound) = fake(SUBPROTOCOL_CLIENT_METADATA);
+    let session = TunnelMeshSession::new(transport);
+    let cancel = CancellationToken::new();
+    let opening = tokio::spawn({
+        let session = session.clone();
+        let cancel = cancel.clone();
+        async move {
+            session
+                .open_stream(StreamRequest::tcp("agent-a", "example.com", 443), &cancel)
+                .await
+        }
+    });
+
+    let hello = tokio::time::timeout(std::time::Duration::from_secs(1), outbound.recv())
+        .await
+        .expect("metadata hello deadline")
+        .expect("metadata hello frame");
+    assert_eq!(hello.frame_type, FrameType::ClientHello);
+    assert_eq!(hello.stream_id, 0);
+
+    let open = tokio::time::timeout(std::time::Duration::from_secs(1), outbound.recv())
+        .await
+        .expect("open frame deadline")
+        .expect("open frame");
+    assert_eq!(open.frame_type, FrameType::OpenStream);
+    let result = serde_json::to_vec(&serde_json::json!({
+        "accepted": true,
+        "stage": "connect",
+        "code": "ok"
+    }))
+    .expect("open result payload");
+    inbound
+        .send(Ok(
+            Frame::new(FrameType::OpenResult, open.stream_id).with_payload(result)
+        ))
+        .await
+        .expect("fake transport accepts open result");
+    assert!(opening.await.expect("open task joins").is_ok());
     session.close().await.expect("session closes");
 }
 

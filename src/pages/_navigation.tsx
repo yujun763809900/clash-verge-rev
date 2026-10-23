@@ -73,13 +73,13 @@ export const navItems: NavigationItem[] = [
     Component: UnlockPage,
   },
   {
-    ...navigationItems.settings,
-    icon: [<SettingsOutlinedIcon key="mui" />, <SettingsSvg key="svg" />],
-    Component: SettingPage,
-  },
-  {
     ...navigationItems.tunnelmesh,
     icon: [<HubOutlinedIcon key="mui" />],
     Component: TunnelMeshPage,
+  },
+  {
+    ...navigationItems.settings,
+    icon: [<SettingsOutlinedIcon key="mui" />, <SettingsSvg key="svg" />],
+    Component: SettingPage,
   },
 ]

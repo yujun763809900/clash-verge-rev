@@ -10,7 +10,7 @@ use tungstenite::http::header;
 async fn handshake_sends_bearer_and_negotiates_protocol() {
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind fake server");
     let address = listener.local_addr().expect("server address");
-    let seen = Arc::new(std::sync::Mutex::new(String::new()));
+    let seen = Arc::new(std::sync::Mutex::new((String::new(), String::new())));
     let seen_server = seen.clone();
     let server = tokio::spawn(async move {
         let (stream, _) = listener.accept().await.expect("accept client");
@@ -22,12 +22,20 @@ async fn handshake_sends_bearer_and_negotiates_protocol() {
                 tungstenite::handshake::server::Response,
                 tungstenite::handshake::server::ErrorResponse,
             > {
-                *seen_server.lock().expect("header lock") = request
+                let mut seen = seen_server.lock().expect("header lock");
+                seen.0 = request
                     .headers()
                     .get(header::AUTHORIZATION)
                     .and_then(|value| value.to_str().ok())
                     .unwrap_or_default()
                     .to_owned();
+                seen.1 = request
+                    .headers()
+                    .get(header::ORIGIN)
+                    .and_then(|value| value.to_str().ok())
+                    .unwrap_or_default()
+                    .to_owned();
+                drop(seen);
                 response.headers_mut().insert(
                     header::SEC_WEBSOCKET_PROTOCOL,
                     tungstenite::http::HeaderValue::from_static(SUBPROTOCOL_CLIENT_METADATA),
@@ -62,7 +70,9 @@ async fn handshake_sends_bearer_and_negotiates_protocol() {
     );
     transport.close().await.expect("close transport");
     server.await.expect("server joins");
-    assert_eq!(&*seen.lock().expect("header lock"), "Bearer secret-token");
+    let seen = seen.lock().expect("header lock");
+    assert_eq!(seen.0, "Bearer secret-token");
+    assert_eq!(seen.1, format!("http://{address}"));
 }
 
 #[tokio::test]

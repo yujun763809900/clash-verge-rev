@@ -124,6 +124,8 @@ struct SessionInner {
     streams: RwLock<HashMap<u32, Arc<StreamState>>>,
     next_stream_id: AtomicU32,
     started: AtomicBool,
+    startup_complete: AtomicBool,
+    startup_notify: Notify,
     done: OnceCell<SessionError>,
 }
 
@@ -163,6 +165,8 @@ impl TunnelMeshSession {
                 streams: RwLock::new(HashMap::new()),
                 next_stream_id: AtomicU32::new(1),
                 started: AtomicBool::new(false),
+                startup_complete: AtomicBool::new(false),
+                startup_notify: Notify::new(),
                 done: OnceCell::new(),
             }),
         }
@@ -180,7 +184,7 @@ impl TunnelMeshSession {
         }
         let session = self.clone();
         tokio::spawn(async move {
-            if session.selected_subprotocol() == super::transport::SUBPROTOCOL_CLIENT_METADATA {
+            let startup = if session.selected_subprotocol() == super::transport::SUBPROTOCOL_CLIENT_METADATA {
                 let payload = ClientMetadataPayload {
                     instance_id: "clash-verge".into(),
                     version: env!("CARGO_PKG_VERSION").into(),
@@ -189,16 +193,43 @@ impl TunnelMeshSession {
                     revision: 1,
                     ..Default::default()
                 };
-                if let Ok(encoded) = encode_client_metadata_payload(&payload) {
-                    let _ = session
+                match encode_client_metadata_payload(&payload) {
+                    Ok(encoded) => session
                         .inner
                         .transport
                         .send_frame(Frame::new(FrameType::ClientHello, 0).with_payload(encoded))
-                        .await;
+                        .await
+                        .map_err(SessionError::from),
+                    Err(error) => Err(SessionError::Protocol(error)),
                 }
+            } else {
+                Ok(())
+            };
+            if let Err(error) = startup {
+                session.finish(error).await;
+                session.inner.startup_notify.notify_waiters();
+                return;
             }
+            session.inner.startup_complete.store(true, Ordering::Release);
+            session.inner.startup_notify.notify_waiters();
             session.receive_loop().await;
         });
+    }
+
+    async fn wait_for_startup(&self, cancel: &CancellationToken) -> Result<(), SessionError> {
+        loop {
+            if self.inner.startup_complete.load(Ordering::Acquire) {
+                return Ok(());
+            }
+            if self.inner.cancel.is_cancelled() {
+                return Err(SessionError::Closed);
+            }
+            tokio::select! {
+                _ = self.inner.startup_notify.notified() => {},
+                _ = cancel.cancelled() => return Err(SessionError::Cancelled),
+                _ = self.inner.cancel.cancelled() => return Err(SessionError::Closed),
+            }
+        }
     }
 
     /// Waits until the physical connection closes or is cancelled.
@@ -228,6 +259,7 @@ impl TunnelMeshSession {
         cancel: &CancellationToken,
     ) -> Result<TunnelMeshStream, SessionError> {
         self.start();
+        self.wait_for_startup(cancel).await?;
         if self.inner.cancel.is_cancelled() {
             return Err(SessionError::Closed);
         }
@@ -526,15 +558,10 @@ impl TunnelMeshStream {
                 }
             };
             let end = offset + chunk_len;
-            let flags = if end == data.len() { FLAG_FIN } else { 0 };
             self.session
                 .inner
                 .transport
-                .send_frame(
-                    Frame::new(FrameType::Data, self.state.id)
-                        .with_flags(flags)
-                        .with_payload(data[offset..end].to_vec()),
-                )
+                .send_frame(Frame::new(FrameType::Data, self.state.id).with_payload(data[offset..end].to_vec()))
                 .await?;
             offset = end;
         }

@@ -190,6 +190,12 @@ export interface TunnelMeshConfigView {
   }
 }
 
+export interface TunnelMeshAgent {
+  id: string
+  name: string
+  online: boolean
+}
+
 export interface TunnelMeshSaveRequest {
   config: {
     mode: string
@@ -204,6 +210,13 @@ export interface TunnelMeshSaveRequest {
 
 export async function getTunnelmeshConfig() {
   return invoke<TunnelMeshConfigView>('get_tunnelmesh_config')
+}
+
+export async function getTunnelmeshAgents(request: {
+  server_url: string
+  token?: string | null
+}) {
+  return invoke<TunnelMeshAgent[]>('get_tunnelmesh_agents', { request })
 }
 
 export async function saveTunnelmeshConfig(request: TunnelMeshSaveRequest) {

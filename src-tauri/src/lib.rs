@@ -222,6 +222,7 @@ mod app_init {
             cmd::check_media_unlock,
             cmd::check_media_unlock_item,
             cmd::get_tunnelmesh_config,
+            cmd::get_tunnelmesh_agents,
             cmd::save_tunnelmesh_config,
             cmd::validate_tunnelmesh_config,
             cmd::get_tunnelmesh_status,
@@ -252,6 +253,12 @@ fn handle_singleton_startup(
 }
 
 pub fn run() -> std::process::ExitCode {
+    // reqwest and the embedded TunnelMesh WebSocket client can enable more
+    // than one Rustls crypto backend through transitive dependencies. Rustls
+    // cannot choose a process-wide provider in that case, so install the
+    // backend selected by this crate before any HTTPS/WSS work starts.
+    let _ = rustls::crypto::ring::default_provider().install_default();
+
     #[cfg(all(target_os = "macos", not(debug_assertions), not(test), not(feature = "verge-dev")))]
     if utils::macos_launch_guard::enforce_before_initialization() == utils::macos_launch_guard::LaunchDisposition::Exit
     {

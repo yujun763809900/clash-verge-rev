@@ -156,6 +156,16 @@ impl TunnelMeshManager {
         Ok(self.status().await)
     }
 
+    /// Restarts the runtime with an explicit stop-first boundary.
+    ///
+    /// Listener-based runtimes cannot bind a replacement generation while the
+    /// previous generation owns the same address, so callers that re-apply an
+    /// enabled configuration must use this path instead of `reload`.
+    pub async fn restart(&self, config: TunnelMeshConfig) -> Result<TunnelMeshStatusSnapshot> {
+        self.stop().await?;
+        self.reload(config).await
+    }
+
     pub async fn stop(&self) -> Result<TunnelMeshStatusSnapshot> {
         let old = {
             let mut state = self.state.lock().await;
@@ -197,6 +207,8 @@ mod tests {
     use super::*;
     use crate::tunnelmesh::config::{TunnelMeshClientConfig, TunnelMeshTunnelConfig};
     use anyhow::anyhow;
+    use std::net::{SocketAddr, TcpListener};
+    use std::sync::Mutex as StdMutex;
     use std::sync::atomic::{AtomicBool, Ordering};
 
     fn valid() -> TunnelMeshConfig {
@@ -246,5 +258,45 @@ mod tests {
         assert_eq!(status.generation, 1);
         assert!(status.config.is_some());
         assert!(!status.last_error.unwrap().contains("secret-token"));
+    }
+
+    struct BoundRuntime {
+        listener: Option<TcpListener>,
+    }
+
+    #[async_trait]
+    impl TunnelMeshRuntime for BoundRuntime {
+        async fn stop(mut self: Box<Self>) -> Result<()> {
+            self.listener.take();
+            Ok(())
+        }
+    }
+
+    struct BoundFactory {
+        address: StdMutex<Option<SocketAddr>>,
+    }
+
+    #[async_trait]
+    impl TunnelMeshRuntimeFactory for BoundFactory {
+        async fn start(&self, _config: &TunnelMeshConfig) -> Result<Box<dyn TunnelMeshRuntime>> {
+            let address = *self.address.lock().unwrap();
+            let listener = TcpListener::bind(address.unwrap_or_else(|| "127.0.0.1:0".parse().unwrap()))?;
+            if address.is_none() {
+                *self.address.lock().unwrap() = Some(listener.local_addr()?);
+            }
+            Ok(Box::new(BoundRuntime {
+                listener: Some(listener),
+            }))
+        }
+    }
+
+    #[tokio::test]
+    async fn reload_stops_previous_runtime_before_starting_next_generation() {
+        let manager = TunnelMeshManager::new(Arc::new(BoundFactory {
+            address: StdMutex::new(None),
+        }));
+        manager.reload(valid()).await.unwrap();
+        manager.restart(valid()).await.unwrap();
+        assert_eq!(manager.status().await.generation, 2);
     }
 }
